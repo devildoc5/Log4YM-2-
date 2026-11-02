@@ -9,8 +9,24 @@ public record LotwUploadFilter(
     // Adds lotw_qsl_sent='I' (Ignored) to the eligible set. Default: skipped.
     bool IncludeIgnored = false,
     // Adds lotw_qsl_sent='N' (explicit No) to the eligible set. Default: skipped.
-    bool IncludeNotSent = false
+    bool IncludeNotSent = false,
     // Always eligible: null (never sent), 'R' (re-send requested), 'Q' (queued).
+    // Upload only these QSOs (picked in Log History). Their sent status is ignored —
+    // selecting a QSO means "send it", even if it was sent before.
+    IEnumerable<string>? QsoIds = null,
+    // Only QSOs in this logbook; null = all logbooks
+    string? Logbook = null
+);
+
+/// <summary>Result of pulling confirmations down from LoTW or QRZ and matching them to the log.</summary>
+public record ConfirmationDownloadResult(
+    bool Success,
+    string Message,
+    int RecordsDownloaded,
+    int Matched,
+    int NewlyConfirmed,
+    int Unmatched,
+    IEnumerable<string> UnmatchedSample
 );
 
 public record LotwUploadResult(

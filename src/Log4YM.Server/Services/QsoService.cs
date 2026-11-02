@@ -12,12 +12,21 @@ public class QsoService : IQsoService
     private readonly IQsoRepository _repository;
     private readonly IHubContext<LogHub, ILogHubClient> _hub;
     private readonly ISpotStatusService? _spotStatusService;
+    private readonly ISettingsRepository? _settingsRepository;
+    private readonly IWorkedBeforeService? _workedBefore;
 
-    public QsoService(IQsoRepository repository, IHubContext<LogHub, ILogHubClient> hub, ISpotStatusService? spotStatusService = null)
+    public QsoService(
+        IQsoRepository repository,
+        IHubContext<LogHub, ILogHubClient> hub,
+        ISpotStatusService? spotStatusService = null,
+        ISettingsRepository? settingsRepository = null,
+        IWorkedBeforeService? workedBefore = null)
     {
         _repository = repository;
         _hub = hub;
         _spotStatusService = spotStatusService;
+        _settingsRepository = settingsRepository;
+        _workedBefore = workedBefore;
     }
 
     public async Task<QsoResponse?> GetByIdAsync(string id)
@@ -54,6 +63,8 @@ public class QsoService : IQsoService
             RstSent = request.RstSent,
             RstRcvd = request.RstRcvd,
             Comment = request.Comment,
+            Logbook = request.Logbook,
+            StationCallsign = request.StationCallsign,
             Station = new StationInfo
             {
                 Name = request.Name,
@@ -62,14 +73,35 @@ public class QsoService : IQsoService
             }
         };
 
+        // Manual entry: never silently drop a QSO the operator typed in
+        return (await SaveAsync(qso, skipDuplicates: false))!;
+    }
+
+    public Task<QsoResponse?> CreateFromQsoAsync(Qso qso, bool skipDuplicates = true)
+    {
+        qso.Callsign = qso.Callsign.ToUpperInvariant();
+        return SaveAsync(qso, skipDuplicates);
+    }
+
+    private async Task<QsoResponse?> SaveAsync(Qso qso, bool skipDuplicates)
+    {
+        await ApplyLogbookAsync(qso);
+
+        if (skipDuplicates &&
+            await _repository.ExistsAsync(qso.Callsign, qso.QsoDate, qso.TimeOn, qso.Band, qso.Mode))
+        {
+            return null;
+        }
+
         var created = await _repository.CreateAsync(qso);
 
         // Update spot status cache incrementally
         _spotStatusService?.OnQsoLogged(
             created.Callsign,
-            created.Country,
+            created.Country ?? created.Station?.Country,
             created.Band,
             created.Mode);
+        _workedBefore?.Invalidate();
 
         // Broadcast to all clients via SignalR
         await _hub.BroadcastQso(new QsoLoggedEvent(
@@ -82,10 +114,43 @@ public class QsoService : IQsoService
             created.Frequency,
             created.RstSent,
             created.RstRcvd,
-            created.Station?.Grid
+            created.Grid ?? created.Station?.Grid
         ));
 
         return MapToResponse(created);
+    }
+
+    /// <summary>
+    /// Fill in the logbook (the active one from Settings) and the on-air callsign (from that
+    /// logbook's definition) when the QSO doesn't already carry them.
+    /// </summary>
+    private async Task ApplyLogbookAsync(Qso qso)
+    {
+        if (_settingsRepository is null)
+        {
+            qso.Logbook = Logbooks.Normalize(qso.Logbook);
+            return;
+        }
+
+        var settings = await _settingsRepository.GetAsync() ?? new UserSettings();
+        var logbookSettings = settings.Logbooks ?? new LogbookSettings();
+
+        qso.Logbook = Logbooks.Normalize(
+            string.IsNullOrWhiteSpace(qso.Logbook) ? logbookSettings.Active : qso.Logbook);
+
+        if (string.IsNullOrWhiteSpace(qso.StationCallsign))
+        {
+            var definition = logbookSettings.Logbooks.FirstOrDefault(l =>
+                string.Equals(Logbooks.Normalize(l.Name), qso.Logbook, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(definition?.StationCallsign))
+            {
+                qso.StationCallsign = definition.StationCallsign.Trim().ToUpperInvariant();
+            }
+        }
+        else
+        {
+            qso.StationCallsign = qso.StationCallsign.Trim().ToUpperInvariant();
+        }
     }
 
     public async Task<QsoResponse?> UpdateAsync(string id, UpdateQsoRequest request)
@@ -102,6 +167,11 @@ public class QsoService : IQsoService
         if (request.RstSent != null) existing.RstSent = request.RstSent;
         if (request.RstRcvd != null) existing.RstRcvd = request.RstRcvd;
         if (request.Comment != null) existing.Comment = request.Comment;
+        if (request.Logbook != null) existing.Logbook = Logbooks.Normalize(request.Logbook);
+        if (request.StationCallsign != null)
+            existing.StationCallsign = string.IsNullOrWhiteSpace(request.StationCallsign)
+                ? null
+                : request.StationCallsign.Trim().ToUpperInvariant();
 
         existing.Station ??= new StationInfo();
         if (request.Name != null) existing.Station.Name = request.Name;
@@ -109,12 +179,15 @@ public class QsoService : IQsoService
         if (request.Country != null) existing.Station.Country = request.Country;
 
         await _repository.UpdateAsync(id, existing);
+        _workedBefore?.Invalidate();
         return MapToResponse(existing);
     }
 
     public async Task<bool> DeleteAsync(string id)
     {
-        return await _repository.DeleteAsync(id);
+        var deleted = await _repository.DeleteAsync(id);
+        if (deleted) _workedBefore?.Invalidate();
+        return deleted;
     }
 
     public async Task<QsoStatistics> GetStatisticsAsync()
@@ -122,7 +195,7 @@ public class QsoService : IQsoService
         return await _repository.GetStatisticsAsync();
     }
 
-    private static QsoResponse MapToResponse(Qso qso) => new(
+    internal static QsoResponse MapToResponse(Qso qso) => new(
         qso.Id,
         qso.Callsign,
         qso.QsoDate,
@@ -144,6 +217,12 @@ public class QsoService : IQsoService
             qso.Station?.Longitude
         ),
         qso.Comment,
-        qso.CreatedAt
+        qso.CreatedAt,
+        Logbooks.Normalize(qso.Logbook),
+        qso.StationCallsign,
+        qso.Qsl?.Lotw?.Sent,
+        qso.Qsl?.Lotw?.Rcvd,
+        qso.QrzSyncStatus == SyncStatus.Synced,
+        qso.QrzConfirmed
     );
 }

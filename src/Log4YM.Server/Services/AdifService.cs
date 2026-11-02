@@ -276,7 +276,8 @@ public partial class AdifService : IAdifService
             Mode: request?.Mode,
             FromDate: request?.FromDate,
             ToDate: request?.ToDate,
-            Limit: 100000 // Large limit for export
+            Limit: 100000, // Large limit for export
+            Logbook: request?.Logbook
         );
 
         var (qsos, _) = await _qsoRepository.SearchAsync(searchRequest);
@@ -413,6 +414,8 @@ public partial class AdifService : IAdifService
             Continent = continent,
             Comment = GetStringField(fields, "comment"),
             Notes = GetStringField(fields, "notes"),
+            StationCallsign = GetStringField(fields, "station_callsign")?.ToUpperInvariant(),
+            Logbook = GetStringField(fields, "app_log4ym_logbook"),
             Station = new StationInfo
             {
                 Name = GetStringField(fields, "name"),
@@ -460,7 +463,8 @@ public partial class AdifService : IAdifService
             "comment", "notes", "cqz", "ituz", "state", "lat", "lon",
             "qsl_sent", "qslsdate", "qsl_rcvd", "qslrdate",
             "lotw_qsl_sent", "lotw_qsl_rcvd", "eqsl_qsl_sent", "eqsl_qsl_rcvd",
-            "contest_id", "stx", "stx_string", "srx", "srx_string"
+            "contest_id", "stx", "stx_string", "srx", "srx_string",
+            "station_callsign", "app_log4ym_logbook"
         };
 
         foreach (var kvp in fields)
@@ -603,15 +607,25 @@ public partial class AdifService : IAdifService
                 AppendAdifField(sb, "SRX_STRING", qso.Contest.SerialRcvd);
         }
 
-        // Station callsign
-        if (!string.IsNullOrEmpty(stationCallsign))
-            AppendAdifField(sb, "STATION_CALLSIGN", stationCallsign);
+        // Station callsign: the QSO's own on-air call (special-event logbooks) wins over the default
+        var onAirCall = !string.IsNullOrEmpty(qso.StationCallsign) ? qso.StationCallsign : stationCallsign;
+        if (!string.IsNullOrEmpty(onAirCall))
+            AppendAdifField(sb, "STATION_CALLSIGN", onAirCall);
+
+        // Logbook name, so a re-import puts the QSO back in the same logbook
+        if (!string.IsNullOrEmpty(qso.Logbook) && !Logbooks.Default.Equals(qso.Logbook, StringComparison.OrdinalIgnoreCase))
+            AppendAdifField(sb, "APP_LOG4YM_LOGBOOK", qso.Logbook);
 
         // Export extra ADIF fields that were preserved during import
         if (qso.AdifExtra != null)
         {
             foreach (var element in qso.AdifExtra)
             {
+                // Older imports kept these in AdifExtra; they're written above now
+                if (element.Name.Equals("station_callsign", StringComparison.OrdinalIgnoreCase) ||
+                    element.Name.Equals("app_log4ym_logbook", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 var value = element.Value?.ToString();
                 if (!string.IsNullOrEmpty(value))
                 {

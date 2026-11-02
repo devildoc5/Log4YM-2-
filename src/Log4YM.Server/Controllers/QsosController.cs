@@ -10,10 +10,32 @@ namespace Log4YM.Server.Controllers;
 public class QsosController : ControllerBase
 {
     private readonly IQsoService _qsoService;
+    private readonly IWorkedBeforeService _workedBefore;
 
-    public QsosController(IQsoService qsoService)
+    public QsosController(IQsoService qsoService, IWorkedBeforeService workedBefore)
     {
         _qsoService = qsoService;
+        _workedBefore = workedBefore;
+    }
+
+    /// <summary>
+    /// Worked/confirmed status for a callsign, its grid and its DXCC entity — overall and on the
+    /// given band and mode. Pass logbook to check one logbook only (e.g. a special event).
+    /// </summary>
+    [HttpGet("worked-before")]
+    [ProducesResponseType(typeof(WorkedBeforeResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<WorkedBeforeResponse>> GetWorkedBefore(
+        [FromQuery] string callsign,
+        [FromQuery] string? band = null,
+        [FromQuery] string? mode = null,
+        [FromQuery] string? grid = null,
+        [FromQuery] string? logbook = null)
+    {
+        if (string.IsNullOrWhiteSpace(callsign) || callsign.Trim().Length < 3)
+            return BadRequest("callsign is required");
+
+        return Ok(await _workedBefore.GetAsync(callsign, band, mode, grid, logbook));
     }
 
     /// <summary>
@@ -29,7 +51,8 @@ public class QsosController : ControllerBase
         [FromQuery] DateTime? fromDate = null,
         [FromQuery] DateTime? toDate = null,
         [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 50)
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? logbook = null)
     {
         var skip = (page - 1) * pageSize;
         var request = new QsoSearchRequest(
@@ -40,7 +63,8 @@ public class QsosController : ControllerBase
             FromDate: fromDate,
             ToDate: toDate,
             Limit: pageSize,
-            Skip: skip
+            Skip: skip,
+            Logbook: logbook
         );
 
         var result = await _qsoService.GetQsosAsync(request);

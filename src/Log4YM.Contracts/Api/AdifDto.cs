@@ -14,5 +14,6 @@ public record AdifExportRequest(
     string? Mode = null,
     DateTime? FromDate = null,
     DateTime? ToDate = null,
-    IEnumerable<string>? QsoIds = null
+    IEnumerable<string>? QsoIds = null,
+    string? Logbook = null
 );

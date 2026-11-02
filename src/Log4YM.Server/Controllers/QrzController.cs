@@ -129,6 +129,20 @@ public class QrzController : ControllerBase
     /// Sync unsynced/modified QSOs to QRZ logbook with parallel uploads and progress updates via SignalR.
     /// Only syncs QSOs that are new (NotSynced) or have been modified since last sync (Modified).
     /// </summary>
+    /// <summary>
+    /// Download confirmed QSOs from the QRZ logbook and mark matching QSOs QRZ-confirmed.
+    /// Needs the logbook API key (and QRZ's XML Logbook Data subscription for FETCH).
+    /// </summary>
+    [HttpPost("download")]
+    [ProducesResponseType(typeof(Log4YM.Contracts.Api.ConfirmationDownloadResult), StatusCodes.Status200OK)]
+    public async Task<ActionResult<Log4YM.Contracts.Api.ConfirmationDownloadResult>> DownloadConfirmations(
+        [FromServices] IConfirmationSyncService confirmations,
+        CancellationToken cancellationToken)
+    {
+        var result = await confirmations.DownloadQrzAsync(cancellationToken);
+        return Ok(result);
+    }
+
     [HttpPost("sync")]
     [ProducesResponseType(typeof(QrzUploadResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

@@ -107,6 +107,40 @@ public class Qso
     [BsonElement("lotwSyncStatus")]
     [BsonRepresentation(BsonType.String)]
     public SyncStatus LotwSyncStatus { get; set; } = SyncStatus.NotSynced;
+
+    // QRZ confirmation (downloaded from the QRZ logbook via FETCH STATUS:CONFIRMED)
+    [BsonElement("qrzConfirmed")]
+    public bool QrzConfirmed { get; set; }
+
+    [BsonElement("qrzConfirmedAt")]
+    public DateTime? QrzConfirmedAt { get; set; }
+
+    /// <summary>
+    /// Logbook this QSO belongs to (e.g. "Main", or a special-event log such as "W7A 2026").
+    /// Null is treated as the default logbook so QSOs logged before logbooks existed stay in "Main".
+    /// </summary>
+    [BsonElement("logbook")]
+    public string? Logbook { get; set; }
+
+    /// <summary>
+    /// Callsign used on the air for this QSO (ADIF STATION_CALLSIGN). Set by special-event
+    /// logbooks; null means the station callsign from Settings.
+    /// </summary>
+    [BsonElement("station_callsign")]
+    public string? StationCallsign { get; set; }
+}
+
+public static class Logbooks
+{
+    public const string Default = "Main";
+
+    public static string Normalize(string? name) =>
+        string.IsNullOrWhiteSpace(name) ? Default : name.Trim();
+
+    /// <summary>True when the QSO is in the given logbook; a null/empty filter matches every logbook.</summary>
+    public static bool Matches(Qso qso, string? logbook) =>
+        string.IsNullOrWhiteSpace(logbook) ||
+        string.Equals(Normalize(qso.Logbook), Normalize(logbook), StringComparison.OrdinalIgnoreCase);
 }
 
 public class StationInfo

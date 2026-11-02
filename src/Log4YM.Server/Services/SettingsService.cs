@@ -35,12 +35,34 @@ public class SettingsService : ISettingsService
         settings.Cluster ??= new();
         settings.SpotStatus ??= new();
         settings.Ai ??= new();
+        settings.Lotw ??= new();
+        settings.Logbooks ??= new();
+        settings.Wsjtx ??= new();
 
         return settings;
     }
 
     public async Task<UserSettings> SaveSettingsAsync(UserSettings settings)
     {
+        // The Settings panel posts the whole object, but logbooks and the WSJT-X listener are
+        // saved through their own endpoints and an older frontend won't send them at all.
+        // Keep the stored copies so a general "Save" never wipes them.
+        var existing = await _repository.GetAsync(settings.Id ?? "default");
+        if (existing != null)
+        {
+            settings.Logbooks = existing.Logbooks ?? new();
+            settings.Wsjtx = existing.Wsjtx ?? new();
+
+            settings.Lotw ??= new();
+            var storedLotw = existing.Lotw ?? new();
+            settings.Lotw.LastQslDownload = storedLotw.LastQslDownload;
+            // Blank password means "unchanged", so clearing the field by accident doesn't log you out
+            if (string.IsNullOrEmpty(settings.Lotw.Password))
+                settings.Lotw.Password = storedLotw.Password;
+            if (settings.Lotw.Username == null)
+                settings.Lotw.Username = storedLotw.Username;
+        }
+
         return await _repository.UpsertAsync(settings);
     }
 }

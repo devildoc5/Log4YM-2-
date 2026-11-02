@@ -25,6 +25,9 @@ export interface LotwSettings {
   tqslPath: string;
   // Optional TQSL station location name (passed as `-l <name>`); empty = TQSL default.
   stationCallsign: string;
+  // lotw.arrl.org website login — only used to download confirmations
+  username?: string;
+  password?: string;
 }
 
 export interface AppearanceSettings {
@@ -173,7 +176,7 @@ export interface Settings {
   gridStates: Record<string, string>;
 }
 
-export type SettingsSection = 'station' | 'qrz' | 'lotw' | 'rotator' | 'database' | 'appearance' | 'map' | 'header' | 'ai' | 'spectrum' | 'about';
+export type SettingsSection = 'station' | 'qrz' | 'lotw' | 'logbooks' | 'wsjtx' | 'rotator' | 'database' | 'appearance' | 'map' | 'header' | 'ai' | 'spectrum' | 'about';
 
 interface SettingsState {
   // Settings data
@@ -239,6 +242,8 @@ const defaultSettings: Settings = {
     enabled: false,
     tqslPath: '',
     stationCallsign: '',
+    username: '',
+    password: '',
   },
   appearance: {
     theme: 'dark',

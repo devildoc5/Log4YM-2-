@@ -7,6 +7,8 @@ import { useAppStore } from '../store/appStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { GlassPanel } from '../components/GlassPanel';
 import { getCountryFlag } from '../core/countryFlags';
+import { WorkedBeforeCard } from '../components/WorkedBeforeCard';
+import { LogbookSelector } from '../components/LogbookSelector';
 
 // Helper to format date for input
 const formatDateForInput = (date: Date): string => {
@@ -250,6 +252,7 @@ export function LogEntryPlugin() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['qsos'] });
       queryClient.invalidateQueries({ queryKey: ['statistics'] });
+      queryClient.invalidateQueries({ queryKey: ['logbooks'] });
       // Save focused callsign to map overlay BEFORE clearing (only logged QSOs persist on map)
       const info = useAppStore.getState().focusedCallsignInfo;
       if (info?.latitude != null && info?.longitude != null) {
@@ -355,6 +358,8 @@ export function LogEntryPlugin() {
       title="Log Entry"
       icon={<Radio className="w-5 h-5" />}
       actions={
+        <div className="flex items-center gap-2">
+        <LogbookSelector />
         <button
           type="button"
           onClick={toggleFollowRadio}
@@ -377,6 +382,7 @@ export function LogEntryPlugin() {
             </>
           )}
         </button>
+        </div>
       }
     >
       <form onSubmit={handleSubmit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); handleClear(); } }} className="p-3 space-y-3">
@@ -502,6 +508,19 @@ export function LogEntryPlugin() {
             </div>
           </div>
         )}
+
+        {/* Worked before: call / grid / DXCC, overall and on this band & mode, plus distance */}
+        <WorkedBeforeCard
+          callsign={formData.callsign}
+          band={formData.band}
+          mode={formData.mode}
+          grid={formData.grid || (focusedCallsignInfo?.callsign?.toUpperCase() === formData.callsign.toUpperCase() ? focusedCallsignInfo?.grid : null)}
+          latitude={focusedCallsignInfo?.callsign?.toUpperCase() === formData.callsign.toUpperCase() ? focusedCallsignInfo?.latitude : null}
+          longitude={focusedCallsignInfo?.callsign?.toUpperCase() === formData.callsign.toUpperCase() ? focusedCallsignInfo?.longitude : null}
+          myGrid={settings.station.gridSquare}
+          myLatitude={settings.station.latitude}
+          myLongitude={settings.station.longitude}
+        />
 
         {/* Name field with lock pattern */}
         <div>

@@ -46,6 +46,20 @@ public static class BandHelper
     }
 
     /// <summary>
+    /// Sort key that orders band names low frequency to high (160m, 80m … 2m, 70cm).
+    /// Bands not in the table sort last, alphabetically.
+    /// </summary>
+    public static string SortKey(string band)
+    {
+        for (var i = 0; i < BandRanges.Length; i++)
+        {
+            if (string.Equals(BandRanges[i].Band, band, StringComparison.OrdinalIgnoreCase))
+                return i.ToString("D2");
+        }
+        return "99" + band;
+    }
+
+    /// <summary>
     /// Check if a frequency is within amateur bands
     /// </summary>
     public static bool IsAmateurBand(long frequencyHz)

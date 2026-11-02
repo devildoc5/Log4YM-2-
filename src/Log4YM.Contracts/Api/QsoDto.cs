@@ -12,7 +12,11 @@ public record CreateQsoRequest(
     string? Name = null,
     string? Grid = null,
     string? Country = null,
-    string? Comment = null
+    string? Comment = null,
+    // Logbook to log into; null = the active logbook from Settings
+    string? Logbook = null,
+    // On-air callsign; null = the logbook's callsign, else the station callsign
+    string? StationCallsign = null
 );
 
 public record UpdateQsoRequest(
@@ -27,7 +31,9 @@ public record UpdateQsoRequest(
     string? Name = null,
     string? Grid = null,
     string? Country = null,
-    string? Comment = null
+    string? Comment = null,
+    string? Logbook = null,
+    string? StationCallsign = null
 );
 
 public record QsoResponse(
@@ -43,7 +49,14 @@ public record QsoResponse(
     string? RstRcvd,
     StationInfoDto? Station,
     string? Comment,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    string? Logbook = null,
+    string? StationCallsign = null,
+    // Confirmation state: LoTW sent/received ('Y'/'N'/null) and QRZ confirmed
+    string? LotwSent = null,
+    string? LotwRcvd = null,
+    bool QrzSynced = false,
+    bool QrzConfirmed = false
 );
 
 public record StationInfoDto(
@@ -66,7 +79,9 @@ public record QsoSearchRequest(
     DateTime? ToDate = null,
     int? Dxcc = null,
     int Limit = 50,
-    int Skip = 0
+    int Skip = 0,
+    // Only QSOs in this logbook; null = all logbooks
+    string? Logbook = null
 );
 
 public record PaginatedQsoResponse(
@@ -85,4 +100,33 @@ public record QsoStatistics(
     int QsosToday,
     Dictionary<string, int> QsosByBand,
     Dictionary<string, int> QsosByMode
+);
+
+/// <summary>Worked/confirmed status for one thing (a callsign, a grid, or a DXCC entity).</summary>
+public record WorkedStatus(
+    string? Key,
+    int QsoCount,
+    bool Worked,
+    bool WorkedOnBand,
+    bool WorkedOnMode,
+    bool WorkedOnBandMode,
+    bool Confirmed,
+    bool ConfirmedOnBand,
+    bool ConfirmedOnMode,
+    bool ConfirmedOnBandMode,
+    IReadOnlyList<string> BandsWorked,
+    IReadOnlyList<string> BandsConfirmed,
+    IReadOnlyList<string> ModesWorked
+);
+
+public record WorkedBeforeResponse(
+    string Callsign,
+    string? Band,
+    string? Mode,
+    string? Logbook,
+    WorkedStatus Call,
+    WorkedStatus? Grid,
+    WorkedStatus? Entity,
+    // Most recent previous QSO with this callsign, if any
+    QsoResponse? LastQso
 );

@@ -12,17 +12,32 @@ namespace Log4YM.Server.Controllers;
 public class LotwController : ControllerBase
 {
     private readonly ILotwService _lotwService;
+    private readonly IConfirmationSyncService _confirmations;
     private readonly ISettingsRepository _settingsRepository;
     private readonly ILogger<LotwController> _logger;
 
     public LotwController(
         ILotwService lotwService,
+        IConfirmationSyncService confirmations,
         ISettingsRepository settingsRepository,
         ILogger<LotwController> logger)
     {
         _lotwService = lotwService;
+        _confirmations = confirmations;
         _settingsRepository = settingsRepository;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Download confirmations (QSLs) from LoTW and mark matching QSOs confirmed.
+    /// Incremental unless full=true.
+    /// </summary>
+    [HttpPost("download")]
+    [ProducesResponseType(typeof(ConfirmationDownloadResult), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ConfirmationDownloadResult>> Download([FromQuery] bool full, CancellationToken cancellationToken)
+    {
+        var result = await _confirmations.DownloadLotwAsync(full, cancellationToken);
+        return Ok(result);
     }
 
     /// <summary>
@@ -69,6 +84,9 @@ public class LotwController : ControllerBase
         settings.Lotw.TqslPath = request.TqslPath;
         settings.Lotw.StationCallsign = request.StationCallsign;
         settings.Lotw.Enabled = request.Enabled;
+        if (request.Username != null) settings.Lotw.Username = request.Username.Trim();
+        // An empty password from the UI means "unchanged" so the stored one isn't wiped
+        if (!string.IsNullOrEmpty(request.Password)) settings.Lotw.Password = request.Password;
 
         await _settingsRepository.UpsertAsync(settings);
 
