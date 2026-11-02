@@ -84,6 +84,15 @@ public class LiteQsoRepository : IQsoRepository
 
         // Get total count by executing the query
         var allMatches = query.ToList();
+
+        // Logbook filter is applied in memory: a null/empty logbook means "Main",
+        // which LiteDB's expression translator can't express cleanly.
+        if (!string.IsNullOrWhiteSpace(criteria.Logbook))
+        {
+            var logbook = criteria.Logbook;
+            allMatches = allMatches.Where(q => Logbooks.Matches(q, logbook)).ToList();
+        }
+
         var totalCount = allMatches.Count;
 
         // Apply sorting, skip, and limit in-memory

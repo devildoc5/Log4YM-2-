@@ -83,6 +83,17 @@ public class QsoRepository : IQsoRepository
         if (criteria.Dxcc.HasValue)
             filter &= builder.Eq(q => q.Dxcc, criteria.Dxcc.Value);
 
+        if (!string.IsNullOrWhiteSpace(criteria.Logbook))
+        {
+            var name = Logbooks.Normalize(criteria.Logbook);
+            var exact = builder.Regex(q => q.Logbook,
+                new MongoDB.Bson.BsonRegularExpression($"^{System.Text.RegularExpressions.Regex.Escape(name)}$", "i"));
+            // QSOs saved before logbooks existed have no logbook field and belong to "Main"
+            filter &= name.Equals(Logbooks.Default, StringComparison.OrdinalIgnoreCase)
+                ? builder.Or(builder.Eq(q => q.Logbook, null), builder.Eq(q => q.Logbook, string.Empty), exact)
+                : exact;
+        }
+
         var totalCount = await _collection.CountDocumentsAsync(filter);
 
         var items = await _collection

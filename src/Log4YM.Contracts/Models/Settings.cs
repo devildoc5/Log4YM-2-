@@ -45,6 +45,12 @@ public class UserSettings
     [BsonElement("spectrum")]
     public SpectrumSettings Spectrum { get; set; } = new();
 
+    [BsonElement("logbooks")]
+    public LogbookSettings Logbooks { get; set; } = new();
+
+    [BsonElement("wsjtx")]
+    public WsjtxSettings Wsjtx { get; set; } = new();
+
     [BsonElement("layoutJson")]
     public string? LayoutJson { get; set; }
 
@@ -119,6 +125,66 @@ public class LotwSettings
 
     [BsonElement("lastUploadAt")]
     public DateTime? LastUploadAt { get; set; }
+
+    // LoTW website login, used only to download confirmations (lotwreport.adi).
+    // Uploading goes through TQSL and doesn't need these.
+    [BsonElement("username")]
+    public string? Username { get; set; } = string.Empty;
+
+    [BsonElement("password")]
+    public string? Password { get; set; } = string.Empty;
+
+    // Last APP_LoTW_LASTQSL value returned by LoTW; the next download asks for QSLs since then.
+    [BsonElement("lastQslDownload")]
+    public string? LastQslDownload { get; set; }
+}
+
+[BsonIgnoreExtraElements]
+public class LogbookSettings
+{
+    /// <summary>Logbook new QSOs go into. Null = "Main".</summary>
+    [BsonElement("active")]
+    public string? Active { get; set; }
+
+    [BsonElement("logbooks")]
+    public List<LogbookDefinition> Logbooks { get; set; } = new();
+}
+
+[BsonIgnoreExtraElements]
+public class LogbookDefinition
+{
+    [BsonElement("name")]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>On-air callsign for this logbook (e.g. a special-event call). Empty = station callsign.</summary>
+    [BsonElement("stationCallsign")]
+    public string? StationCallsign { get; set; }
+
+    /// <summary>TQSL station location to sign this logbook's QSOs with. Empty = the default from LOTW settings.</summary>
+    [BsonElement("tqslLocation")]
+    public string? TqslLocation { get; set; }
+
+    [BsonElement("description")]
+    public string? Description { get; set; }
+}
+
+[BsonIgnoreExtraElements]
+public class WsjtxSettings
+{
+    /// <summary>Listen for WSJT-X / JTDX / MSHV "QSO logged" UDP messages and save them automatically.</summary>
+    [BsonElement("enabled")]
+    public bool Enabled { get; set; }
+
+    /// <summary>Address to bind. 0.0.0.0 for unicast; a 224–239.x.x.x address joins that multicast group.</summary>
+    [BsonElement("address")]
+    public string Address { get; set; } = "0.0.0.0";
+
+    [BsonElement("port")]
+    public int Port { get; set; } = 2237;
+
+    /// <summary>Re-send every received datagram to these host:port targets (e.g. GridTracker on 127.0.0.1:2238).</summary>
+    [BsonElement("forwardTo")]
+    public List<string> ForwardTo { get; set; } = new();
 }
 
 [BsonIgnoreExtraElements]

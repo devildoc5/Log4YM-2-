@@ -17,6 +17,12 @@ export interface QsoResponse {
   station?: StationInfo;
   comment?: string;
   createdAt: string;
+  logbook?: string;
+  stationCallsign?: string;
+  lotwSent?: string | null;
+  lotwRcvd?: string | null;
+  qrzSynced?: boolean;
+  qrzConfirmed?: boolean;
 }
 
 export interface StationInfo {
@@ -44,6 +50,10 @@ export interface CreateQsoRequest {
   country?: string;
   comment?: string;
   notes?: string;
+  /** Logbook to log into; omit to use the active logbook */
+  logbook?: string;
+  /** On-air callsign; omit to use the logbook's callsign or the station callsign */
+  stationCallsign?: string;
 }
 
 export interface UpdateQsoRequest {
@@ -214,6 +224,7 @@ export interface QsoQuery {
   toDate?: string;
   page?: number;
   pageSize?: number;
+  logbook?: string;
 }
 
 export interface PaginatedQsoResponse {
@@ -235,7 +246,15 @@ class ApiClient {
     });
 
     if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+      // Keep the server's explanation (e.g. a 400 "Port must be between…") when there is one
+      let detail = '';
+      try {
+        detail = typeof response.text === 'function' ? (await response.text()).trim() : '';
+      } catch {
+        detail = '';
+      }
+      if (detail.startsWith('"') && detail.endsWith('"')) detail = detail.slice(1, -1);
+      throw new Error(`API error: ${response.status}${detail && detail.length < 300 ? ` - ${detail}` : ''}`);
     }
 
     return response.json();
@@ -252,8 +271,49 @@ class ApiClient {
     if (query?.toDate) params.append('toDate', query.toDate);
     if (query?.page) params.append('page', query.page.toString());
     if (query?.pageSize) params.append('pageSize', query.pageSize.toString());
+    if (query?.logbook) params.append('logbook', query.logbook);
     const qs = params.toString();
     return this.fetch<PaginatedQsoResponse>(`/qsos${qs ? `?${qs}` : ''}`);
+  }
+
+  async getWorkedBefore(query: WorkedBeforeQuery, signal?: AbortSignal): Promise<WorkedBeforeResponse> {
+    const params = new URLSearchParams({ callsign: query.callsign });
+    if (query.band) params.append('band', query.band);
+    if (query.mode) params.append('mode', query.mode);
+    if (query.grid) params.append('grid', query.grid);
+    if (query.logbook) params.append('logbook', query.logbook);
+    return this.fetch<WorkedBeforeResponse>(`/qsos/worked-before?${params.toString()}`, { signal });
+  }
+
+  // Logbooks
+  async getLogbooks(): Promise<LogbooksResponse> {
+    return this.fetch<LogbooksResponse>('/logbooks');
+  }
+
+  async saveLogbooks(request: SaveLogbooksRequest): Promise<{ message: string }> {
+    return this.fetch('/logbooks', { method: 'PUT', body: JSON.stringify(request) });
+  }
+
+  async setActiveLogbook(name: string): Promise<{ active: string }> {
+    return this.fetch('/logbooks/active', { method: 'PUT', body: JSON.stringify({ name }) });
+  }
+
+  // WSJT-X / JTDX / MSHV auto-logging
+  async getWsjtxStatus(): Promise<WsjtxStatus> {
+    return this.fetch<WsjtxStatus>('/wsjtx/status');
+  }
+
+  async saveWsjtxSettings(settings: WsjtxSettings): Promise<WsjtxStatus> {
+    return this.fetch<WsjtxStatus>('/wsjtx/settings', { method: 'PUT', body: JSON.stringify(settings) });
+  }
+
+  // Confirmation downloads
+  async downloadLotwConfirmations(full = false): Promise<ConfirmationDownloadResult> {
+    return this.fetch(`/lotw/download${full ? '?full=true' : ''}`, { method: 'POST' });
+  }
+
+  async downloadQrzConfirmations(): Promise<ConfirmationDownloadResult> {
+    return this.fetch('/qrz/download', { method: 'POST' });
   }
 
   async getQso(id: string): Promise<QsoResponse> {
@@ -695,6 +755,9 @@ export interface LotwUploadFilter {
   modes?: string[];
   includeIgnored?: boolean;
   includeNotSent?: boolean;
+  /** Upload exactly these QSOs (picked in Log History), even if already sent */
+  qsoIds?: string[];
+  logbook?: string;
 }
 
 export interface LotwUploadResult {
@@ -887,3 +950,96 @@ export interface CallsignMapImage {
 }
 
 export const api = new ApiClient();
+
+// ---- Worked before ----
+
+export interface WorkedBeforeQuery {
+  callsign: string;
+  band?: string;
+  mode?: string;
+  grid?: string;
+  logbook?: string;
+}
+
+export interface WorkedStatus {
+  key: string | null;
+  qsoCount: number;
+  worked: boolean;
+  workedOnBand: boolean;
+  workedOnMode: boolean;
+  workedOnBandMode: boolean;
+  confirmed: boolean;
+  confirmedOnBand: boolean;
+  confirmedOnMode: boolean;
+  confirmedOnBandMode: boolean;
+  bandsWorked: string[];
+  bandsConfirmed: string[];
+  modesWorked: string[];
+}
+
+export interface WorkedBeforeResponse {
+  callsign: string;
+  band: string | null;
+  mode: string | null;
+  logbook: string | null;
+  call: WorkedStatus;
+  grid: WorkedStatus | null;
+  entity: WorkedStatus | null;
+  lastQso: QsoResponse | null;
+}
+
+// ---- Logbooks ----
+
+export interface LogbookDefinition {
+  name: string;
+  stationCallsign?: string | null;
+  tqslLocation?: string | null;
+  description?: string | null;
+}
+
+export interface LogbookSummary extends LogbookDefinition {
+  qsoCount: number;
+  isActive: boolean;
+  isDefined: boolean;
+}
+
+export interface LogbooksResponse {
+  active: string;
+  logbooks: LogbookSummary[];
+}
+
+export interface SaveLogbooksRequest {
+  active: string;
+  logbooks: LogbookDefinition[];
+}
+
+// ---- WSJT-X ----
+
+export interface WsjtxSettings {
+  enabled: boolean;
+  address: string;
+  port: number;
+  forwardTo: string[];
+}
+
+export interface WsjtxStatus extends WsjtxSettings {
+  listening: boolean;
+  qsosLogged: number;
+  duplicatesSkipped: number;
+  lastCallsign: string | null;
+  lastLoggedAt: string | null;
+  lastClientId: string | null;
+  lastError: string | null;
+}
+
+// ---- Confirmation downloads ----
+
+export interface ConfirmationDownloadResult {
+  success: boolean;
+  message: string;
+  recordsDownloaded: number;
+  matched: number;
+  newlyConfirmed: number;
+  unmatched: number;
+  unmatchedSample: string[];
+}

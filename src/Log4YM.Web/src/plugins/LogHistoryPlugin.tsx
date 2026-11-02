@@ -3,10 +3,11 @@ import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Book, Search, Calendar, Radio, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronUp, ChevronDown, X, CloudUpload, Loader2, Pencil, Trash2, Upload, Download, FileText, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
 import { AgGridReact } from 'ag-grid-react';
-import { ColDef, ICellRendererParams } from 'ag-grid-community';
+import { ColDef, ICellRendererParams, SelectionChangedEvent } from 'ag-grid-community';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-alpine.css';
-import { api, QsoResponse, UpdateQsoRequest, AdifImportResponse } from '../api/client';
+import { api, QsoResponse, UpdateQsoRequest, AdifImportResponse, ConfirmationDownloadResult } from '../api/client';
+import { useLogbooks } from '../hooks/useLogbooks';
 import { GlassPanel } from '../components/GlassPanel';
 import { getCountryFlag } from '../core/countryFlags';
 import { useAppStore } from '../store/appStore';
@@ -90,6 +91,34 @@ const ActionCellRenderer = (props: ICellRendererParams<QsoResponse> & {
   );
 };
 
+// QSL status: LoTW (L) and QRZ (Q). Grey = not sent, amber = sent/uploaded, green = confirmed.
+const QslCellRenderer = (props: ICellRendererParams<QsoResponse>) => {
+  const q = props.data;
+  if (!q) return null;
+  const lotwConfirmed = q.lotwRcvd?.toUpperCase() === 'Y';
+  const lotwSent = q.lotwSent?.toUpperCase() === 'Y';
+  const badge = (label: string, state: 'none' | 'sent' | 'confirmed', title: string) => (
+    <span
+      title={title}
+      className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold font-mono border ${
+        state === 'confirmed' ? 'bg-accent-success/20 text-accent-success border-accent-success/40'
+          : state === 'sent' ? 'bg-accent-warning/15 text-accent-warning border-accent-warning/30'
+          : 'bg-dark-600 text-dark-400 border-glass-100'
+      }`}
+    >
+      {label}
+    </span>
+  );
+  return (
+    <div className="flex items-center gap-1 h-full">
+      {badge('L', lotwConfirmed ? 'confirmed' : lotwSent ? 'sent' : 'none',
+        lotwConfirmed ? 'LoTW: confirmed' : lotwSent ? 'LoTW: uploaded, not confirmed yet' : 'LoTW: not uploaded')}
+      {badge('Q', q.qrzConfirmed ? 'confirmed' : q.qrzSynced ? 'sent' : 'none',
+        q.qrzConfirmed ? 'QRZ: confirmed' : q.qrzSynced ? 'QRZ: uploaded, not confirmed yet' : 'QRZ: not uploaded')}
+    </div>
+  );
+};
+
 export function LogHistoryPlugin() {
   const { onGridReady, onColumnChanged, onSortChanged } = useAgGridState('logHistory');
   const [callsignSearch, setCallsignSearch] = useState('');
@@ -98,8 +127,15 @@ export function LogHistoryPlugin() {
   const [selectedMode, setSelectedMode] = useState<string>('');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
+  const [selectedLogbook, setSelectedLogbook] = useState<string>('');
   const [currentPage, setCurrentPage] = useState(1);
   const [showFilters, setShowFilters] = useState(false);
+  // Rows ticked in the grid, for "upload selected"
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isUploadingSelected, setIsUploadingSelected] = useState<'qrz' | 'lotw' | null>(null);
+  const [isDownloading, setIsDownloading] = useState<'qrz' | 'lotw' | null>(null);
+  const [syncNotice, setSyncNotice] = useState<{ ok: boolean; text: string; details?: string[] } | null>(null);
+  const { data: logbooksData } = useLogbooks();
   const [showSummary, setShowSummary] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [editingQso, setEditingQso] = useState<QsoResponse | null>(null);
@@ -167,6 +203,97 @@ export function LogHistoryPlugin() {
       setIsLotwUploading(false);
     }
   }, [isLotwUploading, setLotwUploadProgress, queryClient]);
+
+  const handleUploadSelectedToQrz = useCallback(async () => {
+    if (isUploadingSelected || selectedIds.length === 0) return;
+    setIsUploadingSelected('qrz');
+    setSyncNotice(null);
+    try {
+      const result = await api.uploadToQrz(selectedIds);
+      const failures = result.results.filter(r => !r.success).map(r => r.message || 'Upload failed');
+      setSyncNotice({
+        ok: result.failedCount === 0,
+        text: `QRZ: ${result.successCount} of ${result.totalCount} selected QSO(s) uploaded${result.failedCount ? `, ${result.failedCount} failed` : ''}.`,
+        details: failures.slice(0, 10),
+      });
+      queryClient.invalidateQueries({ queryKey: ['qsos'] });
+    } catch (error) {
+      setSyncNotice({ ok: false, text: `QRZ upload failed: ${error instanceof Error ? error.message : 'request failed'}` });
+    } finally {
+      setIsUploadingSelected(null);
+    }
+  }, [isUploadingSelected, selectedIds, queryClient]);
+
+  const handleUploadSelectedToLotw = useCallback(async () => {
+    if (isUploadingSelected || selectedIds.length === 0) return;
+    setIsUploadingSelected('lotw');
+    setLotwUploadProgress(null);
+    try {
+      const result = await api.uploadToLotw({ qsoIds: selectedIds });
+      setLotwUploadProgress({
+        stage: result.success ? 'done' : 'error',
+        qsoCount: result.qsoCount,
+        isComplete: true,
+        tqslExitCode: result.tqslExitCode,
+        message: result.message,
+      });
+      if (result.success) queryClient.invalidateQueries({ queryKey: ['qsos'] });
+    } catch (error) {
+      setLotwUploadProgress({
+        stage: 'error',
+        qsoCount: selectedIds.length,
+        isComplete: true,
+        tqslExitCode: -1,
+        message: error instanceof Error ? error.message : 'Request failed',
+      });
+    } finally {
+      setIsUploadingSelected(null);
+    }
+  }, [isUploadingSelected, selectedIds, setLotwUploadProgress, queryClient]);
+
+  const showDownloadResult = useCallback((service: string, result: ConfirmationDownloadResult) => {
+    setSyncNotice({
+      ok: result.success,
+      text: `${service}: ${result.message}`,
+      details: result.unmatched > 0
+        ? ['Not found in your log (check call, band, mode and time):', ...result.unmatchedSample]
+        : undefined,
+    });
+  }, []);
+
+  const handleDownloadLotw = useCallback(async (full: boolean) => {
+    if (isDownloading) return;
+    setIsDownloading('lotw');
+    setSyncNotice(null);
+    try {
+      const result = await api.downloadLotwConfirmations(full);
+      showDownloadResult('LoTW', result);
+      if (result.newlyConfirmed > 0) queryClient.invalidateQueries({ queryKey: ['qsos'] });
+    } catch (error) {
+      setSyncNotice({ ok: false, text: `LoTW download failed: ${error instanceof Error ? error.message : 'request failed'}` });
+    } finally {
+      setIsDownloading(null);
+    }
+  }, [isDownloading, showDownloadResult, queryClient]);
+
+  const handleDownloadQrz = useCallback(async () => {
+    if (isDownloading) return;
+    setIsDownloading('qrz');
+    setSyncNotice(null);
+    try {
+      const result = await api.downloadQrzConfirmations();
+      showDownloadResult('QRZ', result);
+      if (result.newlyConfirmed > 0) queryClient.invalidateQueries({ queryKey: ['qsos'] });
+    } catch (error) {
+      setSyncNotice({ ok: false, text: `QRZ download failed: ${error instanceof Error ? error.message : 'request failed'}` });
+    } finally {
+      setIsDownloading(null);
+    }
+  }, [isDownloading, showDownloadResult, queryClient]);
+
+  const onSelectionChanged = useCallback((event: SelectionChangedEvent<QsoResponse>) => {
+    setSelectedIds(event.api.getSelectedRows().map(r => r.id));
+  }, []);
 
   const handleCancelSync = useCallback(async () => {
     try {
@@ -262,7 +389,7 @@ export function LogHistoryPlugin() {
   }, [editingQso, isSaving, queryClient]);
 
   const { data: response, isLoading } = useQuery({
-    queryKey: ['qsos', callsignSearch, nameSearch, selectedBand, selectedMode, fromDate, toDate, currentPage],
+    queryKey: ['qsos', callsignSearch, nameSearch, selectedBand, selectedMode, fromDate, toDate, selectedLogbook, currentPage],
     queryFn: () => api.getQsos({
       callsign: callsignSearch || undefined,
       name: nameSearch || undefined,
@@ -270,6 +397,7 @@ export function LogHistoryPlugin() {
       mode: selectedMode || undefined,
       fromDate: fromDate || undefined,
       toDate: toDate || undefined,
+      logbook: selectedLogbook || undefined,
       page: currentPage,
       pageSize,
     }),
@@ -295,10 +423,12 @@ export function LogHistoryPlugin() {
     setSelectedMode('');
     setFromDate('');
     setToDate('');
+    setSelectedLogbook('');
     setCurrentPage(1);
   }, []);
 
-  const hasActiveFilters = callsignSearch || nameSearch || selectedBand || selectedMode || fromDate || toDate;
+  const hasActiveFilters = callsignSearch || nameSearch || selectedBand || selectedMode || fromDate || toDate || selectedLogbook;
+  const multipleLogbooks = (logbooksData?.logbooks.length ?? 0) > 1;
 
   const formatTime = (timeStr: string) => {
     if (timeStr && timeStr.length >= 4) {
@@ -370,6 +500,26 @@ export function LogHistoryPlugin() {
       headerName: 'Country',
       valueGetter: (params) => params.data?.station?.country || params.data?.country || '-',
       cellClass: 'text-dark-300',
+      width: 120,
+      resizable: true,
+    },
+    {
+      headerName: 'QSL',
+      colId: 'qsl',
+      cellRenderer: QslCellRenderer,
+      width: 70,
+      resizable: false,
+      sortable: false,
+      filter: false,
+    },
+    {
+      headerName: 'Logbook',
+      field: 'logbook',
+      valueGetter: (params) => {
+        const name = params.data?.logbook || 'Main';
+        return params.data?.stationCallsign ? `${name} (${params.data.stationCallsign})` : name;
+      },
+      cellClass: 'text-dark-300 text-xs',
       width: 120,
       resizable: true,
     },
@@ -465,6 +615,27 @@ export function LogHistoryPlugin() {
                 </span>
               </button>
             )}
+            <span className="text-glass-100 mx-1">|</span>
+            {lotwEnabled && (
+              <button
+                onClick={(e) => handleDownloadLotw(e.shiftKey)}
+                disabled={isDownloading !== null}
+                className="glass-button p-1.5 flex items-center gap-1.5 text-accent-success hover:text-accent-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Download new LoTW confirmations and mark matching QSOs confirmed (Shift+click re-downloads everything)"
+              >
+                {isDownloading === 'lotw' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                <span className="text-xs">LOTW QSLs</span>
+              </button>
+            )}
+            <button
+              onClick={handleDownloadQrz}
+              disabled={isDownloading !== null}
+              className="glass-button p-1.5 flex items-center gap-1.5 text-accent-success hover:text-accent-primary disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Download confirmed QSOs from your QRZ logbook and mark matching QSOs confirmed"
+            >
+              {isDownloading === 'qrz' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              <span className="text-xs">QRZ QSLs</span>
+            </button>
           </div>
         </div>
       }
@@ -879,6 +1050,80 @@ export function LogHistoryPlugin() {
                 className="glass-input px-2 py-1 text-sm font-mono"
               />
             </div>
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-dark-300 font-ui">Logbook:</label>
+              <select
+                value={selectedLogbook}
+                onChange={(e) => {
+                  setSelectedLogbook(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="glass-input px-2 py-1 text-sm"
+              >
+                <option value="">All logbooks</option>
+                {(logbooksData?.logbooks ?? []).map(l => (
+                  <option key={l.name} value={l.name}>{l.name} ({l.qsoCount})</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* Quick logbook switch when there's more than one, without opening the filter row */}
+        {multipleLogbooks && !showFilters && selectedLogbook && (
+          <div className="text-xs text-dark-300 font-ui">
+            Showing logbook <span className="text-accent-warning">{selectedLogbook}</span>
+            <button onClick={() => setSelectedLogbook('')} className="ml-2 underline hover:text-accent-primary">show all</button>
+          </div>
+        )}
+
+        {/* Result of an upload-selected or confirmation download */}
+        {syncNotice && (
+          <div className={`rounded-lg p-3 border text-sm font-ui flex items-start justify-between gap-3 ${
+            syncNotice.ok ? 'bg-accent-success/10 border-accent-success/30 text-dark-100' : 'bg-accent-danger/10 border-accent-danger/30 text-dark-100'
+          }`}>
+            <div className="space-y-1 min-w-0">
+              <div className="flex items-center gap-2">
+                {syncNotice.ok ? <CheckCircle className="w-4 h-4 text-accent-success shrink-0" /> : <AlertTriangle className="w-4 h-4 text-accent-danger shrink-0" />}
+                <span>{syncNotice.text}</span>
+              </div>
+              {syncNotice.details && syncNotice.details.length > 0 && (
+                <ul className="text-xs text-dark-300 font-mono pl-6 space-y-0.5 max-h-32 overflow-y-auto">
+                  {syncNotice.details.map((d, i) => <li key={i}>{d}</li>)}
+                </ul>
+              )}
+            </div>
+            <button onClick={() => setSyncNotice(null)} className="text-dark-300 hover:text-gray-100" title="Dismiss">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Actions for ticked rows */}
+        {selectedIds.length > 0 && (
+          <div className="flex items-center gap-2 p-2 bg-accent-primary/10 border border-accent-primary/30 rounded-lg text-sm font-ui">
+            <span className="text-dark-100">{selectedIds.length} selected</span>
+            <button
+              onClick={handleUploadSelectedToQrz}
+              disabled={isUploadingSelected !== null}
+              className="glass-button px-2 py-1 flex items-center gap-1.5 text-accent-warning hover:text-accent-primary disabled:opacity-50"
+              title="Upload just the ticked QSOs to your QRZ logbook"
+            >
+              {isUploadingSelected === 'qrz' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudUpload className="w-4 h-4" />}
+              <span className="text-xs">Upload to QRZ</span>
+            </button>
+            {lotwEnabled && (
+              <button
+                onClick={handleUploadSelectedToLotw}
+                disabled={isUploadingSelected !== null}
+                className="glass-button px-2 py-1 flex items-center gap-1.5 text-accent-warning hover:text-accent-primary disabled:opacity-50"
+                title="Sign and upload just the ticked QSOs to LoTW via TQSL (even ones sent before)"
+              >
+                {isUploadingSelected === 'lotw' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudUpload className="w-4 h-4" />}
+                <span className="text-xs">Upload to LOTW</span>
+              </button>
+            )}
+            <span className="text-xs text-dark-400 ml-auto">Selection is per page</span>
           </div>
         )}
 
@@ -897,7 +1142,8 @@ export function LogHistoryPlugin() {
               rowHeight={36}
               headerHeight={40}
               suppressCellFocus={true}
-              suppressRowClickSelection={true}
+              rowSelection={{ mode: 'multiRow', checkboxes: true, headerCheckbox: true, enableClickSelection: false }}
+              onSelectionChanged={onSelectionChanged}
               animateRows={true}
               getRowId={(params) => params.data.id}
               suppressMenuHide={true}

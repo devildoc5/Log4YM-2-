@@ -43,6 +43,8 @@ import { gridToLatLon } from '../utils/maidenhead';
 import { useSetupStore, type DatabaseProvider, type ConfigureResult } from '../store/setupStore';
 import { HardDrive, Cloud, AlertTriangle, ArrowRightLeft, RefreshCw } from 'lucide-react';
 import { APP_VERSION } from '../version';
+import { BookOpen, Antenna } from 'lucide-react';
+import { LogbooksSettingsSection, WsjtxSettingsSection } from './LogbookAndWsjtxSettings';
 
 // Settings navigation items
 const SETTINGS_SECTIONS: { id: SettingsSection; name: string; icon: React.ReactNode; description: string }[] = [
@@ -62,7 +64,19 @@ const SETTINGS_SECTIONS: { id: SettingsSection; name: string; icon: React.ReactN
     id: 'lotw',
     name: 'LOTW',
     icon: <CloudUpload className="w-5 h-5" />,
-    description: 'TQSL binary path for LOTW upload',
+    description: 'TQSL upload and confirmation download',
+  },
+  {
+    id: 'logbooks',
+    name: 'Logbooks',
+    icon: <BookOpen className="w-5 h-5" />,
+    description: 'Separate logs for special events',
+  },
+  {
+    id: 'wsjtx',
+    name: 'WSJT-X',
+    icon: <Antenna className="w-5 h-5" />,
+    description: 'Auto-log from WSJT-X / JTDX / MSHV',
   },
   {
     id: 'rotator',
@@ -646,7 +660,44 @@ function LotwSettingsSection() {
           <p className="text-xs text-dark-300">
             Passed to TQSL as <code className="font-mono">-l &lt;name&gt;</code>.
             Useful if your TQSL has multiple station locations configured.
+            A logbook can override this for its own QSOs (Settings → Logbooks).
           </p>
+        </div>
+
+        <div className="pt-4 border-t border-glass-100 space-y-3">
+          <div>
+            <p className="font-medium font-ui text-dark-200">Download confirmations</p>
+            <p className="text-sm text-dark-300">
+              Your lotw.arrl.org website login. Used only by the "LOTW QSLs" button in Log History
+              to pull down confirmations; uploading uses TQSL and doesn't need it.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-sm font-ui text-dark-300">LOTW username</label>
+              <input
+                type="text"
+                value={lotw.username ?? ''}
+                onChange={(e) => updateLotwSettings({ username: e.target.value })}
+                placeholder="Usually your callsign"
+                autoComplete="username"
+                className="glass-input w-full font-mono"
+                disabled={!lotw.enabled}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-ui text-dark-300">LOTW password</label>
+              <input
+                type="password"
+                value={lotw.password ?? ''}
+                onChange={(e) => updateLotwSettings({ password: e.target.value })}
+                placeholder="Leave blank to keep the saved one"
+                autoComplete="current-password"
+                className="glass-input w-full"
+                disabled={!lotw.enabled}
+              />
+            </div>
+          </div>
         </div>
 
       </div>
@@ -2265,6 +2316,10 @@ export function SettingsPanel() {
         return <QrzSettingsSection />;
       case 'lotw':
         return <LotwSettingsSection />;
+      case 'logbooks':
+        return <LogbooksSettingsSection />;
+      case 'wsjtx':
+        return <WsjtxSettingsSection />;
       case 'rotator':
         return <RotatorSettingsSection />;
       case 'database':

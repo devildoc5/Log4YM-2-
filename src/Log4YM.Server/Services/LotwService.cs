@@ -80,15 +80,59 @@ public class LotwService : ILotwService
             return new LotwUploadResult(0, false, -1, msg, 0);
         }
 
-        await BroadcastAsync("preparing", eligible.Count, null, $"Exporting {eligible.Count} QSOs to ADIF", false);
+        // QSOs from a special-event logbook are signed with that logbook's TQSL station
+        // location, so split the upload into one TQSL run per location.
+        var groups = eligible
+            .GroupBy(q => ResolveTqslLocation(q, settings), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var results = new List<LotwUploadResult>();
+        for (var i = 0; i < groups.Count; i++)
+        {
+            var result = await UploadGroupAsync(
+                settings, filter, groups[i].ToList(), groups[i].Key, i == groups.Count - 1, cancellationToken);
+            results.Add(result);
+            if (!result.Success) break;
+        }
+
+        if (results.Count == 1) return results[0];
+
+        return new LotwUploadResult(
+            results.Sum(r => r.QsoCount),
+            results.All(r => r.Success),
+            results.Last().TqslExitCode,
+            string.Join("\n\n", results.Select((r, i) =>
+                $"[Station location: {(string.IsNullOrWhiteSpace(groups[i].Key) ? "TQSL default" : groups[i].Key)}]\n{r.Message}")),
+            results.Sum(r => r.MarkedAsSent));
+    }
+
+    private string? ResolveTqslLocation(Qso qso, UserSettings settings)
+    {
+        var name = Logbooks.Normalize(qso.Logbook);
+        var definition = settings.Logbooks?.Logbooks.FirstOrDefault(l =>
+            string.Equals(Logbooks.Normalize(l.Name), name, StringComparison.OrdinalIgnoreCase));
+        return !string.IsNullOrWhiteSpace(definition?.TqslLocation)
+            ? definition.TqslLocation
+            : (string.IsNullOrWhiteSpace(settings.Lotw.StationCallsign) ? null : settings.Lotw.StationCallsign);
+    }
+
+    private async Task<LotwUploadResult> UploadGroupAsync(
+        UserSettings settings,
+        LotwUploadFilter filter,
+        List<Qso> group,
+        string? location,
+        bool isLast,
+        CancellationToken cancellationToken)
+    {
+        var lotw = settings.Lotw;
+
+        await BroadcastAsync("preparing", group.Count, null, $"Exporting {group.Count} QSOs to ADIF", false);
 
         var stationCallsign = !string.IsNullOrWhiteSpace(filter.StationCallsign)
             ? filter.StationCallsign
-            : (!string.IsNullOrWhiteSpace(lotw.StationCallsign)
-                ? lotw.StationCallsign
-                : settings.Station?.Callsign);
+            : settings.Station?.Callsign;
 
-        var adif = _adifService.ExportToAdif(eligible, stationCallsign);
+        var adif = _adifService.ExportToAdif(group, stationCallsign);
 
         // Write the ADIF under %APPDATA%\Log4YM\lotw-uploads\ (or the equivalent on mac/linux).
         // On success we delete it — the QSO is marked sent in the DB and TQSL's copy is enough.
@@ -105,11 +149,11 @@ public class LotwService : ILotwService
         {
             await File.WriteAllTextAsync(adifPath, adif, cancellationToken);
 
-            await BroadcastAsync("signing", eligible.Count, null, "Handing off to TQSL for signing and upload", false);
+            await BroadcastAsync("signing", group.Count, null, "Handing off to TQSL for signing and upload", false);
 
-            var tqslResult = await _tqsl.UploadAsync(lotw.TqslPath!, adifPath, lotw.StationCallsign, cancellationToken);
+            var tqslResult = await _tqsl.UploadAsync(lotw.TqslPath!, adifPath, location, cancellationToken);
 
-            var (success, message) = InterpretExitCode(tqslResult.ExitCode, eligible.Count);
+            var (success, message) = InterpretExitCode(tqslResult.ExitCode, group.Count);
             keepAdif = !success;
 
             // Include TQSL's own output — lets the user see exactly what the binary reported
@@ -128,27 +172,27 @@ public class LotwService : ILotwService
             var markedAsSent = 0;
             if (success)
             {
-                markedAsSent = await MarkQsosAsSentAsync(eligible);
+                markedAsSent = await MarkQsosAsSentAsync(group);
                 settings.Lotw.LastUploadAt = DateTime.UtcNow;
                 await _settingsRepository.UpsertAsync(settings);
             }
 
-            await BroadcastAsync(success ? "done" : "error", eligible.Count, tqslResult.ExitCode, fullMessage, true);
+            await BroadcastAsync(success ? "done" : "error", group.Count, tqslResult.ExitCode, fullMessage, isLast || !success);
 
-            return new LotwUploadResult(eligible.Count, success, tqslResult.ExitCode, fullMessage, markedAsSent);
+            return new LotwUploadResult(group.Count, success, tqslResult.ExitCode, fullMessage, markedAsSent);
         }
         catch (OperationCanceledException)
         {
             keepAdif = true;
-            await BroadcastAsync("error", eligible.Count, null, "Upload cancelled", true);
+            await BroadcastAsync("error", group.Count, null, "Upload cancelled", true);
             throw;
         }
         catch (Exception ex)
         {
             keepAdif = true;
             _logger.LogError(ex, "LOTW upload failed");
-            await BroadcastAsync("error", eligible.Count, null, ex.Message, true);
-            return new LotwUploadResult(eligible.Count, false, -1, ex.Message, 0);
+            await BroadcastAsync("error", group.Count, null, ex.Message, true);
+            return new LotwUploadResult(group.Count, false, -1, ex.Message, 0);
         }
         finally
         {
@@ -226,10 +270,19 @@ public class LotwService : ILotwService
 
     private async Task<List<Qso>> GetEligibleQsosAsync(LotwUploadFilter filter)
     {
+        // Picked rows from Log History: upload exactly those, whatever their sent status.
+        var ids = filter.QsoIds?.Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
+        if (ids is { Count: > 0 })
+        {
+            var picked = await _qsoRepository.GetByIdsAsync(ids);
+            return picked.Where(q => Logbooks.Matches(q, filter.Logbook)).ToList();
+        }
+
         var searchRequest = new QsoSearchRequest(
             FromDate: filter.DateFrom,
             ToDate: filter.DateTo,
-            Limit: 100_000);
+            Limit: 100_000,
+            Logbook: filter.Logbook);
         var (qsos, _) = await _qsoRepository.SearchAsync(searchRequest);
 
         var bands = filter.Bands?.Where(b => !string.IsNullOrWhiteSpace(b))

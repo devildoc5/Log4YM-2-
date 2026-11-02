@@ -132,6 +132,12 @@ builder.Services.AddSingleton<ITqslRunner, TqslRunner>();
 builder.Services.AddScoped<ILotwService, LotwService>();
 builder.Services.AddScoped<IAdifService, AdifService>();
 builder.Services.AddScoped<IAiService, AiService>();
+builder.Services.AddSingleton<IWorkedBeforeService, WorkedBeforeService>();
+builder.Services.AddScoped<IConfirmationSyncService, ConfirmationSyncService>();
+
+// WSJT-X / JTDX / MSHV automatic logging over UDP
+builder.Services.AddSingleton<WsjtxUdpService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<WsjtxUdpService>());
 
 // Register HTTP client for external APIs
 builder.Services.AddHttpClient("QRZ", client =>
